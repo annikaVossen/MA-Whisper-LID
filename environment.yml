@@ -1,0 +1,6 @@
+name: whisper-lid
+channels:
+  - defaults
+dependencies:
+  - python=3.10
+prefix: /home/stud/vossena1/.conda/envs/whisper-lid

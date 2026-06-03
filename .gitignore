@@ -1,0 +1,12 @@
+fleurs_data/
+outputs/
+*.pt
+*.pkl
+__pycache__/
+*.pyc
+.env
+.vscode/
+*.log
+archive*.tar.gz
+*.tar.gz
+*.zip
