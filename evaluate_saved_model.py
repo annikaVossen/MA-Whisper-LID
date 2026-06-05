@@ -4,7 +4,7 @@ import numpy as np
 import torch
 from sklearn.metrics import classification_report
 
-from config import TEST_DIR, MODEL_ID, HIDDEN_DIM
+from config import TEST_DIR, MODEL_ID, HIDDEN_DIM, RUN_NAME
 from models.mlp_model import LanguageMLP
 from utils.embedding_utils import WhisperEmbedder
 from utils.eval_utils import evaluate_model
@@ -52,13 +52,13 @@ def evaluate_and_plot_model(model, le, test_dir, device, output_dir="outputs", e
     preds = evaluate_model(model, X_test_t, device)
 
     report = classification_report(y_test_enc, preds, target_names=le.classes_)
-    report_path = os.path.join(output_dir, "classification_report_test.txt")
+    report_path = os.path.join(output_dir, "classification_report_" + RUN_NAME + ".txt")
     with open(report_path, "w") as f:
         f.write(report)
 
-    plot_pca(X_test, y_test, le.classes_, "Sample Whisper Embeddings by Language", os.path.join(output_dir, "plots", "pca_test.png"))
-    plot_tsne(X_test, y_test, le.classes_, "Sample Embeddings tSNE", os.path.join(output_dir, "plots", "tsne_test.png"))
-    plot_cm(y_test_enc, preds, le.classes_, "Sample Confusion Matrix", os.path.join(output_dir, "plots", "confusion_test.png"))
+    plot_pca(X_test, y_test, le.classes_, "Sample Whisper Embeddings by Language", os.path.join(output_dir, "plots", "pca_" + RUN_NAME + ".png"))
+    plot_tsne(X_test, y_test, le.classes_, "Sample Embeddings tSNE", os.path.join(output_dir, "plots", "tsne_" + RUN_NAME + ".png"))
+    plot_cm(y_test_enc, preds, le.classes_, "Sample Confusion Matrix", os.path.join(output_dir, "plots", "confusion_" + RUN_NAME + ".png"))
 
     print(f"Saved report to {report_path}")
     print(f"Saved plots to {os.path.join(output_dir, 'plots')}")
@@ -69,7 +69,7 @@ def evaluate_and_plot_model(model, le, test_dir, device, output_dir="outputs", e
 if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    le = load_label_encoder("outputs/checkpoints/label_encoder.pkl")
+    le = load_label_encoder("outputs/checkpoints/label_encoder_" + RUN_NAME + ".pkl")
     label_classes = le.classes_
 
     embedder = WhisperEmbedder(MODEL_ID, device)
@@ -81,7 +81,7 @@ if __name__ == "__main__":
         num_classes=len(label_classes)
     ).to(device)
 
-    model = load_model(model, "outputs/checkpoints/mlp_model_test.pt", device)
+    model = load_model(model, "outputs/checkpoints/mlp_model_" + RUN_NAME + ".pt", device)
     model.eval()
 
     evaluate_and_plot_model(model, le, TEST_DIR, device, embedder=embedder, X_test=X_test, y_test=_)

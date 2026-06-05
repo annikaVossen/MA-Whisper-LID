@@ -18,7 +18,7 @@ class LanguageMLP(nn.Module):
 
 def train_model(model, optimizer, X_train_t, y_train_t, device, epochs=30):
     criterion = nn.CrossEntropyLoss()
-
+    losses = []
     X_train_t = X_train_t.to(device)
     y_train_t = y_train_t.to(device)
 
@@ -27,9 +27,12 @@ def train_model(model, optimizer, X_train_t, y_train_t, device, epochs=30):
 
         logits = model(X_train_t)
         loss = criterion(logits, y_train_t)
-
+        losses.append(loss.item)
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
         print(f"Epoch {epoch+1}: loss={loss.item():.4f}")
+
+        return losses
+

@@ -1,5 +1,6 @@
 from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
+from matplotlib.colors import ListedColormap
 import numpy as np
 from sklearn.metrics import confusion_matrix
 from sklearn.manifold import TSNE
@@ -38,6 +39,10 @@ def plot_cm(y_test_enc, preds, classes, title, save_path):
     plt.close()
 
 def plot_tsne(X, y, classes, title, save_path):
+    # base_colors = plt.cm.tab20.colors  # 20 colors
+    # extra_colors = plt.cm.tab10.colors[:5]  # 5 more
+    # all_colors = base_colors + extra_colors
+    # cmap_25 = ListedColormap(all_colors)
     tsne = TSNE(
     n_components=2,
     perplexity=10,

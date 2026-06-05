@@ -65,7 +65,7 @@ def train_and_evaluate(data_train, data_test, device):
 
     optimizer = torch.optim.Adam(model.parameters(), lr=LR)
 
-    train_model(
+    losses = train_model(
         model,
         optimizer,
         X_train_t,
@@ -74,14 +74,16 @@ def train_and_evaluate(data_train, data_test, device):
         epochs=EPOCHS
     )
 
+    np.savetxt("outputs/losses/run_" + RUN_NAME + ".txt")
+
     os.makedirs("outputs/checkpoints", exist_ok=True)
-    save_model(model, "outputs/checkpoints/mlp_model_test.pt")
-    save_label_encoder(le, "outputs/checkpoints/label_encoder.pkl")
+    save_model(model, "outputs/checkpoints/mlp_model_" + RUN_NAME + ".pt")
+    save_label_encoder(le, "outputs/checkpoints/label_encoder_"  + RUN_NAME + ".pkl")
 
     evaluate_and_plot_model(model, le, data_test, device, output_dir="outputs", embedder=embedder, X_test=X_test, y_test=y_test)
 
 
-def evaluate_only(data_test, device, checkpoint_path="outputs/checkpoints/mlp_model_test.pt", encoder_path="outputs/checkpoints/label_encoder.pkl"):
+def evaluate_only(data_test, device, checkpoint_path="outputs/checkpoints/mlp_model_" + RUN_NAME + ".pt", encoder_path="outputs/checkpoints/label_encoder_"  + RUN_NAME + ".pkl"):
     le = load_label_encoder(encoder_path)
     embedder = WhisperEmbedder(MODEL_ID, device)
     X_test, y_test = build_embeddings(data_test, embedder)
