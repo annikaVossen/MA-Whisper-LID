@@ -109,7 +109,7 @@ def save_fleurs_language(lang_code, save_root, max_samples):
 
 
 
-# languages = ["en_us", "de_de", "es_419", "fr_fr", "pl_pl", "ar_eg", "uk_ua", "bn_in", ""da_dk","el_gr", "fa_ir",
-# languages = [ "fi_fi", "hi_in", "hu_hu", "id_id", "it_it", "ja_jp", "nl_nl", "pt_br", "ro_ro", "ru_ru", "sv_se", "ta_in", "tr_tr", "cmn_hans_cn"]
+languages = ["en_us", "de_de", "es_419", "fr_fr", "pl_pl", "ar_eg", "uk_ua", "bn_in", "da_dk","el_gr", "fa_ir", "fi_fi", "hi_in", "hu_hu", "id_id", "it_it", "ja_jp", "nl_nl", "pt_br", "ro_ro", "ru_ru", "sv_se", "ta_in", "tr_tr", "cmn_hans_cn"]
+print(len(languages))
 for lang in languages:
     save_fleurs_language(lang, save_root="fleurs_data", max_samples=5000)  # most languages seem to max out around 600-1000 sammples

@@ -1,4 +1,4 @@
-MODEL_ID = "openai/whisper-base"
+MODEL_ID = "openai/whisper-large-v3-turbo"
 
 DATA_DIR = "fleurs_data"
 TRAIN_DIR = "fleurs_data/train"
@@ -12,4 +12,4 @@ EPOCHS = 30
 
 RANDOM_SEED = 42
 
-RUN_NAME = "25base"
+RUN_NAME = "25largev3turbo"

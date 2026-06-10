@@ -1,5 +1,6 @@
 import argparse
 import numpy as np
+from beispiele import gpu_function
 import torch
 import os
 import random
@@ -15,13 +16,48 @@ from utils.embedding_utils import WhisperEmbedder
 from utils.save_utils import load_label_encoder, save_label_encoder, save_model, load_model
 
 import librosa
+import time
+os.environ["LINE_PROFILE"] = "1"
+from line_profiler import profile
+
+random.seed(RANDOM_SEED)
+np.random.seed(RANDOM_SEED)
+
+import pandas as pd
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-def build_embeddings(data_dir, embedder, max_per_lang=None):
+def build_embeddings(data_dir, embedder, tt, max_per_lang=None, reuse_embeddings=True):
+
+
+    cache_path = "outputs/embeddings/" + RUN_NAME + "_" + tt + ".npz"
+
+    if os.path.exists(cache_path) and reuse_embeddings:
+        print(f"Loading cached embeddings from {cache_path}")
+        data = np.load(cache_path)
+        return data["X"], data["y"]
+    
+    # if they dont exist or we want to rebuild because we are measuring the time we build em
+
     X = []
     y = []
 
+    if os.path.isfile(data_dir):
+        # single file mode
+        lang = os.path.basename(os.path.dirname(data_dir))
+
+        audio, _ = librosa.load(data_dir, sr=16000, mono=True)
+        emb = embedder.get_embedding(audio)
+
+        X.append(emb)
+        y.append(lang)
+
+        X = np.stack(X).astype(np.float32)
+        y = np.array(y)
+
+        return X, y
+
+    print(f"Building embeddings and saving to {cache_path}")
     for lang in sorted(os.listdir(data_dir)):
         lang_folder = os.path.join(data_dir, lang)
         if not os.path.isdir(lang_folder):
@@ -33,22 +69,33 @@ def build_embeddings(data_dir, embedder, max_per_lang=None):
 
         for file in files:
             path = os.path.join(lang_folder, file)
-            try:
-                audio, _ = librosa.load(path, sr=16000, mono=True)
-                emb = embedder.get_embedding(audio)
-                X.append(emb)
-                y.append(lang)
-            except Exception as e:
-                print(f"Skipping {path}: {e}")
+            
+            audio, _ = librosa.load(path, sr=16000, mono=True)
+            emb = embedder.get_embedding(audio)
+            X.append(emb)
+            y.append(lang)
+           
 
-    return np.array(X), np.array(y)
+    X = np.stack(X).astype(np.float32)
+    y = np.array(y)
+
+
+    np.savez_compressed(cache_path, X=X, y=y)
+    print(f"Embeddings saved to {cache_path}")
+
+    data_loaded = np.load(cache_path)
+
+    x_loaded = data_loaded["X"]
+
+    print(f"TEST: {np.allclose(X, x_loaded)}")
+    return X, y
 
 
 def train_and_evaluate(data_train, data_test, device):
     embedder = WhisperEmbedder(MODEL_ID, device)
 
-    X_train, y_train = build_embeddings(data_train, embedder, max_per_lang=MAX_PER_LANG)
-    X_test, y_test = build_embeddings(data_test, embedder)
+    X_train, y_train = build_embeddings(data_train, embedder, max_per_lang=MAX_PER_LANG, tt='train')
+    X_test, y_test = build_embeddings(data_test, embedder, tt='test')
 
     le = LabelEncoder()
     y_train_enc = le.fit_transform(y_train)
@@ -74,7 +121,7 @@ def train_and_evaluate(data_train, data_test, device):
         epochs=EPOCHS
     )
 
-    np.savetxt("outputs/losses/run_" + RUN_NAME + ".txt")
+    np.savetxt("outputs/compare/losses_" + RUN_NAME + ".txt", losses)
 
     os.makedirs("outputs/checkpoints", exist_ok=True)
     save_model(model, "outputs/checkpoints/mlp_model_" + RUN_NAME + ".pt")
@@ -83,10 +130,11 @@ def train_and_evaluate(data_train, data_test, device):
     evaluate_and_plot_model(model, le, data_test, device, output_dir="outputs", embedder=embedder, X_test=X_test, y_test=y_test)
 
 
-def evaluate_only(data_test, device, checkpoint_path="outputs/checkpoints/mlp_model_" + RUN_NAME + ".pt", encoder_path="outputs/checkpoints/label_encoder_"  + RUN_NAME + ".pkl"):
+def evaluate_only(data_test, device, checkpoint_path="outputs/checkpoints/mlp_model_" + RUN_NAME + ".pt", encoder_path="outputs/checkpoints/label_encoder_"  + RUN_NAME + ".pkl", reuse_embeddings=True, timing=False):
+
     le = load_label_encoder(encoder_path)
     embedder = WhisperEmbedder(MODEL_ID, device)
-    X_test, y_test = build_embeddings(data_test, embedder)
+    X_test, y_test = build_embeddings(data_test, embedder, tt='test', reuse_embeddings=reuse_embeddings)
 
     model = LanguageMLP(
         input_dim=X_test.shape[1],
@@ -97,15 +145,131 @@ def evaluate_only(data_test, device, checkpoint_path="outputs/checkpoints/mlp_mo
     model = load_model(model, checkpoint_path, device)
     model.eval()
 
-    evaluate_and_plot_model(model, le, data_test, device, output_dir="outputs", embedder=embedder, X_test=X_test, y_test=y_test)
+    _, _, _, _, results_df = evaluate_and_plot_model(model, le, data_test, device, output_dir="outputs", embedder=embedder, X_test=X_test, y_test=y_test, timing=timing)
+    return results_df
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train and/or evaluate the Whisper language MLP model.")
     parser.add_argument("--evaluate-only", action="store_true", help="Skip training and evaluate an existing saved model.")
+    parser.add_argument("--measure-inference-time", action="store_true", help="Measure the inference time of the model.")
+    parser.add_argument("--measure-gpu", action="store_true", help="Measure GPU utilization during inference.")
+    parser.add_argument("--train", action="store_true", help="Training model")
     args = parser.parse_args()
 
     if args.evaluate_only:
-        evaluate_only(TEST_DIR, device)
-    else:
+        print("Evaluating saved model...")
+        results_df = evaluate_only(TEST_DIR, device, reuse_embeddings=False)
+        csvpath = "outputs/compare/experiments.csv"
+
+        if os.path.exists(csvpath):
+            results_df.to_csv(csvpath, mode='a', header=False, index=False)
+        else:
+            results_df.to_csv(csvpath, index=False)
+
+    if args.measure_inference_time:
+        print("Measuring inference time...")
+        if not torch.cuda.is_available():
+            print("CUDA nicht verfügbar.")
+            exit()
+        # get a single item for testing the inference time 
+        all_files = []
+
+        for root, _, files in os.walk(TEST_DIR):
+            for f in files:
+                if f.endswith((".wav", ".mp3")):
+                    all_files.append(os.path.join(root, f))
+
+        test_file = random.choice(all_files)
+
+        evaluate_only(test_file, device, reuse_embeddings=False, timing=True) # warmup
+        # WICHTIG:
+        # Warmup zum Initialisieren/Speicher allokieren...
+        # Erster Durchlauf dauert in der Regel länger
+        start = time.perf_counter()
+        evaluate_only(test_file, device, reuse_embeddings=False, timing=True)
+        torch.cuda.synchronize()
+        end = time.perf_counter()
+
+        print(f"Laufzeit Warmup: {end - start:.3f} s")
+        laufzeiten = np.zeros(15)
+        # need to add in a part about not saving the embeddings here each round
+        for i in range(15):
+            test_file = random.choice(all_files)
+            # WICHTIG:
+            # CUDA arbeitet asynchron.
+            # Ohne synchronize() misst man häufig zu wenig Zeit.
+            start = time.perf_counter()
+            results = evaluate_only(test_file, device, reuse_embeddings=False, timing=True)
+            torch.cuda.synchronize()
+            end = time.perf_counter()
+            laufzeiten[i] = end - start
+            print(f"Laufzeit ({i}): {end - start:.3f} s")
+        print(f"Laufzeiten: {laufzeiten}")
+        durschnitt = np.mean(laufzeiten)
+        print(f"Durchschnittliche Laufzeit: {durschnitt:.3f} s")
+        # results_df["inference_time"] = durschnitt
+        
+        csvpath = "outputs/compare/experiments_official.csv"
+
+        df = pd.read_csv(csvpath)
+        if "inference_time" not in df.columns:
+            df["inference_time"] = None
+
+        df.loc[df["run"] == RUN_NAME, "inference_time"] = durschnitt
+
+        df.to_csv("outputs/compare/experiments_official.csv", index=False)
+
+    if args.measure_gpu:
+
+        if not torch.cuda.is_available():
+            print("CUDA nicht verfügbar.")
+            exit()
+        # get a single item for testing the inference time 
+        all_files = []
+
+        for root, _, files in os.walk(TEST_DIR):
+            for f in files:
+                if f.endswith((".wav", ".mp3")):
+                    all_files.append(os.path.join(root, f))
+
+        test_file = random.choice(all_files)
+
+        # warmup
+        for _ in range(3):
+            evaluate_only(test_file, device, reuse_embeddings=False, timing=True)
+
+        
+        torch.cuda.empty_cache()
+        torch.cuda.memory.reset_peak_memory_stats()
+        torch.cuda.synchronize()
+        # call gpu_function aka our inference on one file
+        results = evaluate_only(test_file, device, reuse_embeddings=False, timing=True)
+        torch.cuda.synchronize()
+        gpu_stats = torch.cuda.memory.memory_stats() # ->allocated_bytes peak
+        peak_mem = gpu_stats["allocated_bytes.all.peak"] / (1024 ** 2) # in MB
+        max_allocated = torch.cuda.max_memory_allocated() / (1024 ** 2) # in MB
+        max_reserved = torch.cuda.max_memory_reserved() / (1024 ** 2) # in MB
+
+        print(f"Peak GPU Memory Usage: {peak_mem:.2f} MB")
+        print(f"Max Allocated Memory: {max_allocated:.2f} MB")
+        print(f"Max Reserved Memory: {max_reserved:.2f} MB")    
+
+        csvpath = "outputs/compare/experiments_official.csv"
+
+        df = pd.read_csv(csvpath)
+        if "peak_memory" not in df.columns:
+            df["peak_memory"] = None
+
+        df.loc[df["run"] == RUN_NAME, "peak_memory"] = peak_mem
+
+
+
+        df.to_csv("outputs/compare/experiments_official.csv", index=False)
+
+
+    
+    if args.train:
+        print("Training and evaluating model...")
         train_and_evaluate(TRAIN_DIR, TEST_DIR, device)
+
