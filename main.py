@@ -16,89 +16,56 @@ from utils.save_utils import load_label_encoder, save_label_encoder, save_model,
 
 import librosa
 import time
-# os.environ["LINE_PROFILE"] = "1"
-# from line_profiler import profile
+import whisper
+
 
 random.seed(config.RANDOM_SEED)
 np.random.seed(config.RANDOM_SEED)
 
 import pandas as pd
 
-from audio_preprocessing import audio_to_mel, get_embedding_inter
-
+from audio_preprocessing import audio_to_mel, get_embedding_inter, build_embeddings
+import gc
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-# @profile
-def build_embeddings(data_dir, tt, max_per_lang=None, reuse_embeddings=True):
+def load_partial_encoder(model_id, stop_layer, device):
+    # load everything to CPU first - no GPU memory used yet
+    model = whisper.load_model(model_id, download_root='whisper_models', device='cpu')
+    encoder = model.encoder
+
+    if stop_layer == -1:  # conv1 only
+        del encoder.conv2
+        del encoder.blocks
+        del encoder.positional_embedding
+        del encoder.ln_post
+        print("Keeping only first convolution layer")
+    elif stop_layer == 0:  # conv1 + conv2
+        del encoder.blocks
+        del encoder.positional_embedding
+        del encoder.ln_post
+        print("Keeping only both convolution layers")
+    else:
+        full_blocks = len(model.encoder.blocks)
+        # conv layers + positional embedding + N transformer blocks + ln_post
+        encoder.blocks = encoder.blocks[:stop_layer]
+        print(f"Keeping {stop_layer} of {full_blocks} transformer blocks")
 
 
-    cache_path = "outputs/embeddings/" + config.RUN_NAME + "_" + tt + ".npz"
-
-    if os.path.exists(cache_path) and reuse_embeddings:
-        print(f"Loading cached embeddings from {cache_path}")
-        data = np.load(cache_path)
-        return data["X"], data["y"]
+    encoder = encoder.to(device)
     
-    # if they dont exist or we want to rebuild because we are measuring the time we build em
+    # explicitly free the rest
+    del model
+    gc.collect()
+    torch.cuda.empty_cache()
 
-    X = []
-    y = []
-
-
-    if os.path.isfile(data_dir):
-        # single file mode
-        lang = os.path.basename(os.path.dirname(data_dir))
-
-        # audio, _ = librosa.load(data_dir, sr=16000, mono=True)
-        emb = get_embedding_inter(data_dir, stop_layer=config.STOP_LAYER, aggr=config.AGGR)
-      
-        X.append(emb)
-        y.append(lang)
-
-        X = np.stack(X).astype(np.float32)
-        y = np.array(y)
-
-        return X, y
-
-    print(f"Building embeddings and saving to {cache_path}")
-    for lang in sorted(os.listdir(data_dir)):
-        lang_folder = os.path.join(data_dir, lang)
-        if not os.path.isdir(lang_folder):
-            continue
-
-        files = [f for f in os.listdir(lang_folder) if f.endswith((".wav", ".mp3"))]
-        if max_per_lang is not None:
-            files = random.sample(files, min(max_per_lang, len(files)))
-
-        for file in files:
-            path = os.path.join(lang_folder, file)
-            
-            # audio, _ = librosa.load(path, sr=16000, mono=True)
-            emb = get_embedding_inter(path, stop_layer=config.STOP_LAYER, aggr=config.AGGR)
-            X.append(emb)
-            y.append(lang)
-           
-
-    X = np.stack(X).astype(np.float32)
-    y = np.array(y)
+    return encoder
 
 
-    np.savez_compressed(cache_path, X=X, y=y)
-    print(f"Embeddings saved to {cache_path}")
-
-    # data_loaded = np.load(cache_path)
-
-    # x_loaded = data_loaded["X"]
-
-    # print(f"TEST: {np.allclose(X, x_loaded)}")
-    return X, y
+def train_and_evaluate(data_train, data_test, device, model):
 
 
-def train_and_evaluate(data_train, data_test, device):
-
-
-    X_train, y_train = build_embeddings(data_train, max_per_lang=config.MAX_PER_LANG, tt='train', reuse_embeddings=False)
-    X_test, y_test = build_embeddings(data_test, tt='test', reuse_embeddings=False)
+    X_train, y_train = build_embeddings(data_train, max_per_lang=config.MAX_PER_LANG, tt='train', reuse_embeddings=False, model=model)
+    X_test, y_test = build_embeddings(data_test, tt='test', reuse_embeddings=False, model=model)
 
     le = LabelEncoder()
     y_train_enc = le.fit_transform(y_train)
@@ -136,14 +103,14 @@ def train_and_evaluate(data_train, data_test, device):
     return results_df
 
 # @profile
-def evaluate_only(data_test, device, checkpoint_path="outputs/checkpoints/mlp_model_" + config.RUN_NAME + ".pt", encoder_path="outputs/checkpoints/label_encoder_"  + config.RUN_NAME + ".pkl", reuse_embeddings=True, timing=False):
+def evaluate_only(data_test, device, checkpoint_path="outputs/checkpoints/mlp_model_" + config.RUN_NAME + ".pt", encoder_path="outputs/checkpoints/label_encoder_"  + config.RUN_NAME + ".pkl", reuse_embeddings=True, timing=False, whisper_model=None):
 
     le = load_label_encoder(encoder_path)
 
     # embedder = WhisperEmbedder(MODEL_ID, device)
     # print("before even getting the embedding??", torch.cuda.max_memory_allocated() / 1024**2)
 
-    X_test, y_test = build_embeddings(data_test, tt='test', reuse_embeddings=reuse_embeddings)
+    X_test, y_test = build_embeddings(data_test, tt='test', model=whisper_model, reuse_embeddings=reuse_embeddings)
 
     model = LanguageMLP(
         input_dim=X_test.shape[1],
@@ -151,10 +118,10 @@ def evaluate_only(data_test, device, checkpoint_path="outputs/checkpoints/mlp_mo
         num_classes=len(le.classes_)
     ).to(device)
 
-    model = load_model(model, checkpoint_path, device)
-    model.eval()
+    mlp_model = load_model(model, checkpoint_path, device)
+    mlp_model.eval()
 
-    _, _, _, _, results_df = evaluate_and_plot_model(model, le, data_test, device, output_dir="outputs", X_test=X_test, y_test=y_test, timing=timing)
+    _, _, _, _, results_df = evaluate_and_plot_model(mlp_model, le, data_test, device, output_dir="outputs", X_test=X_test, y_test=y_test, timing=timing)
     return results_df
 
 
@@ -167,6 +134,7 @@ if __name__ == "__main__":
     parser.add_argument("--test-one", action="store_true", help="Testing on a single audio file")
     parser.add_argument("--stop-layer", type=float, default=config.STOP_LAYER)
     parser.add_argument("--run-name", type=str, default=config.RUN_NAME)
+    parser.add_argument('--model', type=str, default=config.MODEL_ID)
     
 
     args = parser.parse_args()
@@ -177,9 +145,15 @@ if __name__ == "__main__":
     if args.run_name is not None:
         config.RUN_NAME = args.run_name
 
+    if args.model is not None:
+        config.MODEL_ID = args.model
+    model = load_partial_encoder(config.MODEL_ID, config.STOP_LAYER, device)   # problem! what if config.MODEL_ID is modified in sweep???
+    print(f"Successfully loaded {config.MODEL_ID} model")
+    print(next(model.parameters()).device)
+
     if args.evaluate_only:
         print("Evaluating saved model...")
-        results_df = evaluate_only(config.TEST_DIR, device, checkpoint_path="outputs/checkpoints/mlp_model_" + config.RUN_NAME + ".pt", encoder_path="outputs/checkpoints/label_encoder_"  + config.RUN_NAME + ".pkl", reuse_embeddings=True)
+        results_df = evaluate_only(config.TEST_DIR, device, checkpoint_path="outputs/checkpoints/mlp_model_" + config.RUN_NAME + ".pt", encoder_path="outputs/checkpoints/label_encoder_"  + config.RUN_NAME + ".pkl", reuse_embeddings=False, whisper_model=model)
         csvpath = "outputs/compare/full_output_log.csv"
     
         if os.path.exists(csvpath):
@@ -202,13 +176,13 @@ if __name__ == "__main__":
 
         test_file = random.choice(all_files)
 
-        results = evaluate_only(test_file, device, checkpoint_path="outputs/checkpoints/mlp_model_" + config.RUN_NAME + ".pt", encoder_path="outputs/checkpoints/label_encoder_"  + config.RUN_NAME + ".pkl", reuse_embeddings=False, timing=True)
+        results = evaluate_only(test_file, device, checkpoint_path="outputs/checkpoints/mlp_model_" + config.RUN_NAME + ".pt", encoder_path="outputs/checkpoints/label_encoder_"  + config.RUN_NAME + ".pkl", reuse_embeddings=False, timing=True, whisper_model=model)
         # warmup
         # WICHTIG:
         # Warmup zum Initialisieren/Speicher allokieren...
         # Erster Durchlauf dauert in der Regel länger
         start = time.perf_counter()
-        evaluate_only(test_file, device, checkpoint_path="outputs/checkpoints/mlp_model_" + config.RUN_NAME + ".pt", encoder_path="outputs/checkpoints/label_encoder_"  + config.RUN_NAME + ".pkl", reuse_embeddings=False, timing=True)
+        evaluate_only(test_file, device, checkpoint_path="outputs/checkpoints/mlp_model_" + config.RUN_NAME + ".pt", encoder_path="outputs/checkpoints/label_encoder_"  + config.RUN_NAME + ".pkl", reuse_embeddings=False, timing=True, whisper_model=model)
        
         torch.cuda.synchronize()
         end = time.perf_counter()
@@ -222,7 +196,7 @@ if __name__ == "__main__":
             # CUDA arbeitet asynchron.
             # Ohne synchronize() misst man häufig zu wenig Zeit.
             start = time.perf_counter()
-            results = evaluate_only(test_file, device, checkpoint_path="outputs/checkpoints/mlp_model_" + config.RUN_NAME + ".pt", encoder_path="outputs/checkpoints/label_encoder_"  + config.RUN_NAME + ".pkl", reuse_embeddings=False, timing=True)
+            results = evaluate_only(test_file, device, checkpoint_path="outputs/checkpoints/mlp_model_" + config.RUN_NAME + ".pt", encoder_path="outputs/checkpoints/label_encoder_"  + config.RUN_NAME + ".pkl", reuse_embeddings=False, timing=True, whisper_model=model)
             torch.cuda.synchronize()
             end = time.perf_counter()
             laufzeiten[i] = end - start
@@ -259,16 +233,16 @@ if __name__ == "__main__":
         test_file = random.choice(all_files)
         
         # warmup
-        for _ in range(3):
-            evaluate_only(test_file, device, checkpoint_path="outputs/checkpoints/mlp_model_" + config.RUN_NAME + ".pt", encoder_path="outputs/checkpoints/label_encoder_"  + config.RUN_NAME + ".pkl", reuse_embeddings=False, timing=True)
+        # for _ in range(3):
+        #     evaluate_only(test_file, device, checkpoint_path="outputs/checkpoints/mlp_model_" + config.RUN_NAME + ".pt", encoder_path="outputs/checkpoints/label_encoder_"  + config.RUN_NAME + ".pkl", reuse_embeddings=False, timing=True)
 
-        
+        gc.collect()
         torch.cuda.empty_cache()
         torch.cuda.memory.reset_peak_memory_stats()
         torch.cuda.synchronize()
-        # print("when we start", torch.cuda.max_memory_allocated() / 1024**2)
+        print("when we start", torch.cuda.max_memory_allocated() / 1024**2)
         # call gpu_function aka our inference on one file
-        results = evaluate_only(test_file, device, checkpoint_path="outputs/checkpoints/mlp_model_" + config.RUN_NAME + ".pt", encoder_path="outputs/checkpoints/label_encoder_"  + config.RUN_NAME + ".pkl", reuse_embeddings=False, timing=True)
+        results = evaluate_only(test_file, device, checkpoint_path="outputs/checkpoints/mlp_model_" + config.RUN_NAME + ".pt", encoder_path="outputs/checkpoints/label_encoder_"  + config.RUN_NAME + ".pkl", reuse_embeddings=False, timing=True, whisper_model=model)
 
         torch.cuda.synchronize()
         gpu_stats = torch.cuda.memory.memory_stats() # ->allocated_bytes peak
@@ -294,13 +268,26 @@ if __name__ == "__main__":
 
 
         df.to_csv("outputs/compare/full_output_log.csv", index=False)
+        # held = []
+        # for obj in gc.get_objects():
+        #     try:
+        #         if torch.is_tensor(obj) and obj.is_cuda:
+        #             mb = obj.element_size() * obj.nelement() / 1024**2
+        #             if mb > 0.1:  # catch everything >100 KB
+        #                 held.append((obj.shape, mb))
+        #     except:
+        #         pass
 
-
+        # held.sort(key=lambda x: -x[1])
+        # total = sum(mb for _, mb in held)
+        # print(f"Total tracked: {total:.1f} MB across {len(held)} tensors")
+        # for shape, mb in held[:30]:
+        #     print(f"  {mb:.1f} MB  {shape}")
     
     if args.train:
-        print(f"Training and evaluating {config.RUN_NAME} model with {config.STOP_LAYER} layers")
+        print(f"Training and evaluating {config.RUN_NAME} model with {config.STOP_LAYER} layers and {config.AGGR} aggregation")
         
-        results_df = train_and_evaluate(config.TRAIN_DIR, config.TEST_DIR, device)
+        results_df = train_and_evaluate(config.TRAIN_DIR, config.TEST_DIR, device, model=model)
         csvpath = "outputs/compare/full_output_log.csv"
 
         if os.path.exists(csvpath):

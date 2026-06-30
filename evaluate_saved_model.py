@@ -5,7 +5,7 @@ import torch
 from sklearn.metrics import classification_report, f1_score, accuracy_score
 import pandas as pd
 import config
-from config import TEST_DIR, MODEL_ID, HIDDEN_DIM, LR, EPOCHS
+from config import TEST_DIR, HIDDEN_DIM, LR, EPOCHS
 from models.mlp_model import LanguageMLP
 # from utils.embedding_utils import WhisperEmbedder
 from utils.eval_utils import evaluate_model
@@ -76,13 +76,13 @@ def evaluate_and_plot_model(model, le, test_dir, device, output_dir="outputs", X
     print(f"Saved plots to {os.path.join(output_dir, 'plots')}")
 
     macro_f1 = f1_score(y_test_enc, preds, average='macro')
-    if MODEL_ID == "base":
+    if config.MODEL_ID == "base":
         full = 6
-    elif MODEL_ID == "small":
+    elif config.MODEL_ID == "small":
         full = 12
-    elif MODEL_ID == "medium": 
+    elif config.MODEL_ID == "medium": 
         full = 24
-    elif MODEL_ID == "large":
+    elif config.MODEL_ID == "large":
         full = 32
 
     if config.STOP_LAYER == "full":
@@ -107,7 +107,7 @@ def evaluate_and_plot_model(model, le, test_dir, device, output_dir="outputs", X
         "run_name": config.RUN_NAME,
 
         # model config
-        "model": MODEL_ID,
+        "model": config.MODEL_ID,
         "hidden_dim": HIDDEN_DIM,
         "epochs": EPOCHS,
         "lr": LR,
@@ -144,7 +144,7 @@ if __name__ == "__main__":
     le = load_label_encoder("outputs/checkpoints/label_encoder_" + config.RUN_NAME + ".pkl")
     label_classes = le.classes_
 
-    # embedder = WhisperEmbedder(MODEL_ID, device)
+    # embedder = WhisperEmbedder(config.MODEL_ID, device)
 
     X_test, _ = build_test_dataset(TEST_DIR)
     model = LanguageMLP(

@@ -11,7 +11,7 @@ import argparse
 
 
 TEST_DIR = "fleurs_data/test"
-model_name = "large-v2"
+model_name = "small"
 model = whisper.load_model(model_name)
 # whisper model either base, small, medium, large-v2/v1 (v3 uses 128 channels, but out input is only 80)
 
@@ -49,7 +49,7 @@ def run_whisper_lid(dataset_dir=TEST_DIR, model=model, my_languages=None):
             "epochs": "----",
             "lr": "----",
         }
-        return result
+        return result, y_true, y_pred
 
     
     for language in my_languages:
@@ -159,11 +159,12 @@ if __name__ == "__main__":
             # CUDA arbeitet asynchron.
             # Ohne synchronize() misst man häufig zu wenig Zeit.
             start = time.perf_counter()
-            result = run_whisper_lid(dataset_dir=test_file, model=model, my_languages=my_languages)
+            result, y_true, y_pred = run_whisper_lid(dataset_dir=test_file, model=model, my_languages=my_languages)
             torch.cuda.synchronize()
 
             end = time.perf_counter()
             results_df = pd.DataFrame([result])
+            print(f"TRUE: {y_true}, PRED: {y_pred}")
 
             laufzeiten[i] = end - start
             print(f"Laufzeit ({i}): {end - start:.3f} s")

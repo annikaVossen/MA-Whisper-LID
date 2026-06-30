@@ -1,4 +1,4 @@
-MODEL_ID = "large-v1"
+MODEL_ID = "NONE"
 
 DATA_DIR = "fleurs_data"
 TRAIN_DIR = "fleurs_data/train"
@@ -12,8 +12,8 @@ EPOCHS = 30
 
 RANDOM_SEED = 42
 
-RUN_NAME = "NOOOOOOOOOOO8layers"
+RUN_NAME = "NOOOOO"
 
-STOP_LAYER = -8000000
+STOP_LAYER = -1000
 
-AGGR = "mean"
+AGGR = "max"

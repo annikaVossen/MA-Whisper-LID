@@ -8,13 +8,81 @@ import inspect
 import sys
 
 # setting path
-from config import MODEL_ID, TEST_DIR
+import config
 import random
 import os
 import numpy as np
+import gc
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+# os.environ["LINE_PROFILE"] = "1"
+# from line_profiler import profile
 
-model = whisper.load_model(MODEL_ID)
-device = model.device
+# @profile
+def build_embeddings(data_dir, tt, model, max_per_lang=None, reuse_embeddings=True):
+
+    cache_path = "outputs/embeddings/" + config.RUN_NAME + "_" + tt + ".npz"
+
+    if os.path.exists(cache_path) and reuse_embeddings:
+        print(f"Loading cached embeddings from {cache_path}")
+        data = np.load(cache_path)
+        return data["X"], data["y"]
+    
+    # if they dont exist or we want to rebuild because we are measuring the time we build em
+
+    X = []
+    y = []
+
+
+    if os.path.isfile(data_dir):
+        # single file mode
+        lang = os.path.basename(os.path.dirname(data_dir))
+
+        # audio, _ = librosa.load(data_dir, sr=16000, mono=True)
+        emb = get_embedding_inter(data_dir, model, stop_layer=config.STOP_LAYER, aggr=config.AGGR)
+      
+        X.append(emb)
+        y.append(lang)
+
+        X = np.stack(X).astype(np.float32)
+        y = np.array(y)
+
+        return X, y
+
+    print(f"Building embeddings and saving to {cache_path}")
+    for lang in sorted(os.listdir(data_dir)):
+        lang_folder = os.path.join(data_dir, lang)
+        if not os.path.isdir(lang_folder):
+            continue
+
+        files = [f for f in os.listdir(lang_folder) if f.endswith((".wav", ".mp3"))]
+        if max_per_lang is not None:
+            files = random.sample(files, min(max_per_lang, len(files)))
+
+        for file in files:
+            path = os.path.join(lang_folder, file)
+            
+            # audio, _ = librosa.load(path, sr=16000, mono=True)
+            emb = get_embedding_inter(path, model, stop_layer=config.STOP_LAYER, aggr=config.AGGR)
+            X.append(emb)
+            y.append(lang)
+           
+
+    X = np.stack(X).astype(np.float32)
+    y = np.array(y)
+
+
+    np.savez_compressed(cache_path, X=X, y=y)
+    print(f"Embeddings saved to {cache_path}")
+
+    # data_loaded = np.load(cache_path)
+
+    # x_loaded = data_loaded["X"]
+
+    # print(f"TEST: {np.allclose(X, x_loaded)}")
+    return X, y
+
+
+
 def load_audio_whisper_style(path):
     audio = whisper.load_audio(path)          # load + resample to 16 kHz
     # print("whisper load", torch.cuda.max_memory_allocated() / 1024**2)
@@ -30,15 +98,14 @@ def audio_to_mel(path):
 
     # move to model device + dtype match
     mel = mel.to(device)
+    # print(mel.device)
+
 
     return mel
 
-def whisper_encoder_until_layer(input_features, stop_layer):
-        encoder = model.encoder
-        # print("encoder init", torch.cuda.max_memory_allocated() / 1024**2)
-
-        # print(torch.is_grad_enabled())
-        # frontend 
+def whisper_encoder_until_layer(input_features, stop_layer, model):
+        encoder = model # model is a partial encoder here
+        
         x = encoder.conv1(input_features)
         x = F.gelu(x)
         # print("conv1", torch.cuda.max_memory_allocated() / 1024**2)
@@ -78,7 +145,7 @@ def whisper_encoder_until_layer(input_features, stop_layer):
         x = encoder.ln_post(x)
         return x
 
-def get_embedding_inter(audio_path, stop_layer, aggr="mean"):
+def get_embedding_inter(audio_path, model, stop_layer, aggr="mean"):
     # print("before loading audio", torch.cuda.max_memory_allocated() / 1024**2)
     features = audio_to_mel(audio_path)
     # print("after loading audio", torch.cuda.max_memory_allocated() / 1024**2)
@@ -86,7 +153,8 @@ def get_embedding_inter(audio_path, stop_layer, aggr="mean"):
     with torch.inference_mode():
         layer_embedding = whisper_encoder_until_layer(
             features,
-            stop_layer=stop_layer   # layer 3 = 4th layer (0-indexed)
+            stop_layer=stop_layer,   # layer 3 = 4th layer (0-indexed)
+            model=model
         )
     # print("after whisper encoder until layer", torch.cuda.max_memory_allocated() / 1024**2)
 # 
@@ -140,7 +208,7 @@ def save_model_structure(model, path):
 if __name__ == "__main__":
     all_files = []
 
-    for root, _, files in os.walk(TEST_DIR):
+    for root, _, files in os.walk(config.TEST_DIR):
         for f in files:
             if f.endswith((".wav", ".mp3")):
                 all_files.append(os.path.join(root, f))
