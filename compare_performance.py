@@ -3,7 +3,6 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import csv
 
-
 def plot_base_losses():
     runs = {
         "full encoder": np.loadtxt("losses_25base-full.txt"),
